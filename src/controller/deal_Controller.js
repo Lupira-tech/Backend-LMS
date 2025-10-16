@@ -6,6 +6,8 @@ import Deal from '../model/deal_Model.js';
 // @access  Public
 export const createDeal = async (req, res) => {
   try {
+    console.log('📝 Creating deal with data:', req.body);
+    
     const {
       title,
       amount,
@@ -13,6 +15,8 @@ export const createDeal = async (req, res) => {
       priority,
       executive,
       manager,
+      associatedCompany,
+      associatedContacts,
       contactId,
       closeDate,
       status,
@@ -21,13 +25,88 @@ export const createDeal = async (req, res) => {
       notes
     } = req.body;
 
-    // Verify contact exists
-    const contact = await Contact.findById(contactId);
+    // Parse contactId - handle both ObjectId string and contact object
+    let parsedContactId;
+    if (typeof contactId === 'object' && contactId._id) {
+      parsedContactId = contactId._id;
+    } else if (typeof contactId === 'object' && contactId.name) {
+      // If contact object without _id, try to find by email
+      const foundContact = await Contact.findOne({ email: contactId.email });
+      if (!foundContact) {
+        return res.status(404).json({
+          success: false,
+          message: 'Contact not found. Please create the contact first.',
+          contactData: contactId
+        });
+      }
+      parsedContactId = foundContact._id;
+    } else if (typeof contactId === 'string') {
+      // Check for placeholder text
+      if (contactId.includes('PUT_CONTACT_ID_HERE') || contactId.includes('PUT_') || contactId.length < 24) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please replace "PUT_CONTACT_ID_HERE" with a real contact ID.',
+          solution: 'First GET /api/contacts to get real contact IDs, then use one of those _id values.',
+          receivedContactId: contactId
+        });
+      }
+      parsedContactId = contactId;
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid contactId format. Expected ObjectId string or contact object with _id or email.',
+        receivedContactId: contactId,
+        expectedFormat: 'ObjectId string like "66f1234567890abcdef12345" or contact object like {"_id": "66f1234567890abcdef12345"} or {"email": "user@example.com"}'
+      });
+    }
+
+    // Verify primary contact exists
+    const contact = await Contact.findById(parsedContactId);
     if (!contact) {
       return res.status(404).json({
         success: false,
-        message: 'Contact not found'
+        message: 'Primary contact not found'
       });
+    }
+
+    // Parse associatedContacts array - handle both ObjectId strings and contact objects
+    let parsedAssociatedContacts = [];
+    if (associatedContacts && associatedContacts.length > 0) {
+      for (const contact of associatedContacts) {
+        let contactId;
+        if (typeof contact === 'object' && contact._id) {
+          contactId = contact._id;
+        } else if (typeof contact === 'object' && contact.email) {
+          // Try to find contact by email
+          const foundContact = await Contact.findOne({ email: contact.email });
+          if (!foundContact) {
+            return res.status(404).json({
+              success: false,
+              message: `Associated contact not found: ${contact.email}. Please create the contact first.`
+            });
+          }
+          contactId = foundContact._id;
+        } else if (typeof contact === 'string') {
+          contactId = contact;
+        } else {
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid associatedContacts format. Expected ObjectId strings or contact objects.',
+            receivedContact: contact,
+            expectedFormat: 'Array of ObjectId strings or contact objects with _id or email'
+          });
+        }
+        parsedAssociatedContacts.push(contactId);
+      }
+
+      // Verify all parsed contacts exist
+      const contactsExist = await Contact.find({ _id: { $in: parsedAssociatedContacts } });
+      if (contactsExist.length !== parsedAssociatedContacts.length) {
+        return res.status(404).json({
+          success: false,
+          message: 'One or more associated contacts not found in database'
+        });
+      }
     }
 
     // Create new deal
@@ -38,7 +117,9 @@ export const createDeal = async (req, res) => {
       priority,
       executive,
       manager,
-      contactId,
+      associatedCompany,
+      associatedContacts: parsedAssociatedContacts,
+      contactId: parsedContactId,
       closeDate,
       status,
       probability,
@@ -50,7 +131,10 @@ export const createDeal = async (req, res) => {
     const savedDeal = await deal.save();
     
     // Populate contact details
-    await savedDeal.populate('contactId', 'name email company');
+    await savedDeal.populate([
+      { path: 'contactId', select: 'name email company' },
+      { path: 'associatedContacts', select: 'name email company' }
+    ]);
 
     res.status(201).json({
       success: true,
@@ -86,6 +170,7 @@ export const getDeals = async (req, res) => {
   try {
     const deals = await Deal.find()
       .populate('contactId', 'name email company')
+      .populate('associatedContacts', 'name email company')
       .sort({ createdAt: -1 });
 
     res.status(200).json({
@@ -320,6 +405,8 @@ export const updateDeal = async (req, res) => {
       priority,
       executive,
       manager,
+      associatedCompany,
+      associatedContacts,
       contactId,
       closeDate,
       status,
@@ -334,7 +421,18 @@ export const updateDeal = async (req, res) => {
       if (!contact) {
         return res.status(404).json({
           success: false,
-          message: 'Contact not found'
+          message: 'Primary contact not found'
+        });
+      }
+    }
+
+    // Verify associated contacts exist if being updated
+    if (associatedContacts && associatedContacts.length > 0) {
+      const contactsExist = await Contact.find({ _id: { $in: associatedContacts } });
+      if (contactsExist.length !== associatedContacts.length) {
+        return res.status(404).json({
+          success: false,
+          message: 'One or more associated contacts not found'
         });
       }
     }
@@ -348,6 +446,8 @@ export const updateDeal = async (req, res) => {
         priority,
         executive,
         manager,
+        associatedCompany,
+        associatedContacts,
         contactId,
         closeDate,
         status,
@@ -356,7 +456,10 @@ export const updateDeal = async (req, res) => {
         notes
       },
       { new: true, runValidators: true }
-    ).populate('contactId', 'name email company');
+    ).populate([
+      { path: 'contactId', select: 'name email company' },
+      { path: 'associatedContacts', select: 'name email company' }
+    ]);
 
     if (!deal) {
       return res.status(404).json({

@@ -51,11 +51,25 @@ const dealSchema = new mongoose.Schema({
     maxlength: [100, 'Manager name cannot exceed 100 characters']
   },
   
-  // Contact Reference
+  // Company Association
+  associatedCompany: {
+    type: String,
+    required: [true, 'Associated company is required'],
+    trim: true,
+    maxlength: [200, 'Company name cannot exceed 200 characters']
+  },
+
+  // Contact References (Multiple contacts can be associated)
+  associatedContacts: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Contact'
+  }],
+
+  // Primary Contact (Backward compatibility)
   contactId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Contact',
-    required: [true, 'Contact ID is required']
+    required: [true, 'Primary contact ID is required']
   },
   
   // Deal Timeline
@@ -109,6 +123,8 @@ dealSchema.index({ stage: 1 });
 dealSchema.index({ status: 1 });
 dealSchema.index({ priority: 1 });
 dealSchema.index({ contactId: 1 });
+dealSchema.index({ associatedCompany: 1 });
+dealSchema.index({ associatedContacts: 1 });
 dealSchema.index({ executive: 1 });
 dealSchema.index({ manager: 1 });
 dealSchema.index({ closeDate: 1 });
